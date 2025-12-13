@@ -703,6 +703,13 @@ pub fn run() {
                      return;
                  }
 
+                 // Alt+Q: 退出应用
+                 if s_lower == "alt+keyq" {
+                     println!("[HANDLER] 退出应用");
+                     app.exit(0);
+                     return;
+                 }
+
                  // Alt+Space: Toggle Window
                  if s_lower == "alt+space" {
                      if let Some(window) = app.get_webview_window("main") {
@@ -791,6 +798,12 @@ pub fn run() {
                 match app.global_shortcut().register("Ctrl+D") {
                     Ok(_) => println!("[SETUP] ✅ 注册成功: Ctrl+D"),
                     Err(e) => println!("[SETUP] ❌ 注册失败: Ctrl+D - {:?}", e),
+                }
+
+                // Alt+Q: 退出应用
+                match app.global_shortcut().register("Alt+Q") {
+                    Ok(_) => println!("[SETUP] ✅ 注册成功: Alt+Q"),
+                    Err(e) => println!("[SETUP] ❌ 注册失败: Alt+Q - {:?}", e),
                 }
 
                 // Alt+Space: Toggle
