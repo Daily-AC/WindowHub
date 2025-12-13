@@ -109,13 +109,42 @@
         right: 0;
         bottom: 0;
         background-color: rgba(0, 0, 0, 0.6);
-        backdrop-filter: blur(4px);
+        /* 移除 backdrop-filter 以修复 IME 坐标问题 */
+        /* backdrop-filter: blur(4px); */ 
         z-index: 10000;
         display: none;
         align-items: flex-start;
         justify-content: center;
         padding-top: 15vh;
     }
+    
+    /* 错误弹窗 (层级最高) */
+    .error-overlay {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background-color: rgba(0,0,0,0.8);
+        z-index: 20000;
+        display: none;
+        align-items: center;
+        justify-content: center;
+    }
+    .error-overlay.active { display: flex; }
+    .error-modal {
+        background-color: #1e1e2e;
+        padding: 24px;
+        border-radius: 12px;
+        border: 1px solid #eba0ac;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        max-width: 400px;
+        text-align: center;
+    }
+    .error-title { color: #eba0ac; font-size: 20px; margin-bottom: 12px; font-weight: bold; }
+    .error-msg { color: #cdd6f4; font-size: 14px; margin-bottom: 24px; line-height: 1.5; white-space: pre-wrap; }
+    .error-btn {
+        background-color: #eba0ac; border: none; padding: 10px 24px; border-radius: 6px;
+        color: #1e1e2e; font-weight: bold; cursor: pointer; transition: opacity 0.2s;
+    }
+    .error-btn:hover { opacity: 0.9; }
     
     .search-overlay.active {
         display: flex;
@@ -276,11 +305,20 @@
   </div>
   
   <!-- 居中搜索弹窗 (Ctrl+K) -->
-  <div class="search-overlay" id="search-overlay">
+   <div class="search-overlay" id="search-overlay">
       <div class="search-panel">
-          <input type="text" class="search-input" id="search-input" placeholder="🔍 搜索并启动应用..." autofocus />
+          <input type="text" class="search-input" id="search-input" placeholder="🔍 搜索应用或文件..." autofocus />
           <div class="search-dropdown" id="search-dropdown"></div>
           <div class="search-hint">↑↓ 选择 · Enter 确认 · Esc 取消</div>
+      </div>
+  </div>
+
+  <!-- 错误弹窗 -->
+  <div class="error-overlay" id="error-overlay">
+      <div class="error-modal">
+          <div class="error-title">⚠️ 提示</div>
+          <div class="error-msg" id="error-msg">发生了一些错误</div>
+          <button class="error-btn" onclick="window.closeError()">知道了</button>
       </div>
   </div>
 
@@ -297,13 +335,8 @@
   </div>
 
   <script>
-    window.onerror = function(msg, url, line, col, error) {
-       alert("🚨 全局错误:\n" + msg + "\n行号: " + line + "\n列号: " + col + "\n错误: " + error);
-       return false;
-    };
-    window.addEventListener('unhandledrejection', function(event) {
-        alert("🚨 未捕获的 Promise 异常:\n" + event.reason);
-    });
+    /* window.onerror 已接管 */
+    /* window.addEventListener('unhandledrejection'...) 已接管 */
   </script>
 
   <script type="module">
@@ -323,6 +356,44 @@
     const searchDropdown = document.getElementById('search-dropdown');
     // Ensure searchOverlay is available globally if possible, or duplicate logic
     const searchOverlay = document.getElementById('search-overlay');
+    const errorOverlay = document.getElementById('error-overlay');
+    const errorMsg = document.getElementById('error-msg');
+
+    // -----------------------------------------------------------
+    // 错误处理 (自定义模态框)
+    // -----------------------------------------------------------
+    window.showError = async function(msg) {
+        console.error("SHOW Error:", msg);
+        errorMsg.textContent = msg;
+        
+        // 隐藏所有窗口，防止遮挡
+        for (const w of embeddedWindows) {
+            await invoke('hide_window', { targetHwnd: w.hwnd });
+        }
+        
+        errorOverlay.classList.add('active');
+    };
+
+    window.closeError = async function() {
+        errorOverlay.classList.remove('active');
+        // 恢复窗口
+        for (const w of embeddedWindows) {
+            await invoke('show_window', { targetHwnd: w.hwnd });
+        }
+        // 重新聚焦当前窗口
+        if (activeHwnd) {
+             await invoke('activate_window', { targetHwnd: activeHwnd });
+        }
+    };
+    
+    // 覆盖全局 onerror
+    window.onerror = function(msg) {
+       window.showError("全局错误: " + msg);
+       return true; // 阻止默认 alert
+    };
+    window.addEventListener('unhandledrejection', function(event) {
+        window.showError("未获 Promise 异常: " + (event.reason ? event.reason.message : event.reason));
+    });
 
     // -----------------------------------------------------------
     // 初始化
@@ -348,6 +419,18 @@
     } else {
         init();
     }
+
+    // 关键优化：当 WindowHub 窗口本身获得焦点时（例如拖拽结束、点击标题栏），自动把焦点"回传"给当前嵌入的应用
+    window.addEventListener('focus', async () => {
+         // 如果搜索框打开，不要乱抢焦点
+         if (document.getElementById('search-overlay').classList.contains('active')) return;
+         if (document.getElementById('error-overlay').classList.contains('active')) return;
+
+         if (activeHwnd) {
+             console.log("Restoring focus to embedded app...");
+             await invoke('activate_window', { targetHwnd: activeHwnd });
+         }
+    });
 
     // 全局快捷键监听 (来自 Rust 事件)
     async function setupShortcuts() {
@@ -385,6 +468,13 @@
         // Ctrl+K: 打开搜索弹窗
         await listen('open-search', () => {
             openSearchPanel();
+        });
+
+        // Ctrl+D: 弹出当前窗口
+        await listen('detach-current-tab', () => {
+            if (activeHwnd) {
+                detachTab(activeHwnd);
+            }
         });
     }
 
@@ -489,37 +579,54 @@
     
     async function performSearch(query) {
         try {
-            searchDropdown.innerHTML = '<div style="padding:10px;color:#6c7086;text-align:center">🔍 正在搜索应用...</div>';
+            searchDropdown.innerHTML = '<div style="padding:10px;color:#6c7086;text-align:center">🔍 正在搜索...</div>';
             searchDropdown.classList.add('show');
             
-            // 只搜索已安装应用
-            const apps = await invoke('enumerate_installed_apps');
+            // 并行搜索应用和文件
+            const pApps = invoke('enumerate_installed_apps');
+            const pFiles = query ? invoke('search_files', { query }) : Promise.resolve([]);
+            
+            const [apps, files] = await Promise.all([pApps, pFiles]);
+            
+            let html = '';
             
             // 过滤应用
             const filteredApps = query 
                 ? apps.filter(a => a.name.toLowerCase().includes(query.toLowerCase()))
                 : apps.slice(0, 15);
-                
-            if (filteredApps.length === 0) {
-                searchDropdown.innerHTML = '<div style="padding:10px;color:#6c7086;text-align:center">未找到匹配的应用</div>';
-                return;
+            
+            if (filteredApps.length > 0) {
+                html += `<div style="padding:8px 20px;font-size:12px;color:#585b70;font-weight:bold;background:#11111b">应用</div>`;
+                html += filteredApps.slice(0, 10).map(a => renderItem(a.name, a.path, '应用')).join('');
             }
             
-            // 使用 data-* 属性存储路径，避免特殊字符问题
-            searchDropdown.innerHTML = filteredApps.slice(0, 15).map((a, i) => `
-                <div class="search-item" data-path="${btoa(encodeURIComponent(a.path))}" data-name="${escapeHtml(a.name)}" onclick="window.handleAppClick(this)">
-                    <div style="font-size:16px">🔹</div>
-                    <div style="flex:1;overflow:hidden;">
-                        <div class="search-item-title">${escapeHtml(a.name)}</div>
-                        <div class="search-item-app" style="font-size:10px;opacity:0.6">${escapeHtml(a.path.split('\\').pop())}</div>
-                    </div>
-                </div>
-            `).join('');
+            if (files.length > 0) {
+                html += `<div style="padding:8px 20px;font-size:12px;color:#585b70;font-weight:bold;background:#11111b;border-top:1px solid #313244">文件</div>`;
+                html += files.slice(0, 10).map(f => renderItem(f.name, f.path, f.is_dir ? '文件夹' : '文件')).join('');
+            }
+            
+            if (html === '') {
+                html = '<div style="padding:10px;color:#6c7086;text-align:center">未找到匹配项</div>';
+            }
+            
+            searchDropdown.innerHTML = html;
             
         } catch(e) {
             console.error(e);
             searchDropdown.innerHTML = `<div style="padding:10px;color:red;">搜索错误: ${e}</div>`;
         }
+    }
+
+    function renderItem(name, path, type) {
+        return `
+            <div class="search-item" data-path="${btoa(encodeURIComponent(path))}" data-name="${escapeHtml(name)}" onclick="window.handleAppClick(this)">
+                <div style="font-size:16px">${type === '应用' ? '🚀' : (type === '文件夹' ? '📂' : '📄')}</div>
+                <div style="flex:1;overflow:hidden;">
+                    <div class="search-item-title">${escapeHtml(name)}</div>
+                    <div class="search-item-app">${type} · ${escapeHtml(path)}</div>
+                </div>
+            </div>
+        `;
     }
     
     // 处理应用点击
@@ -548,7 +655,7 @@
             }
         } catch (e) {
             overlay.classList.remove('active');
-            alert('❌ ' + e);
+            window.showError('启动失败: ' + e);
         }
     };
 
@@ -578,7 +685,12 @@
         
         // 延时重置大小，确保渲染正确
         setTimeout(() => updateEmbeddedWindowSize(hwnd), 100);
-        setTimeout(() => updateEmbeddedWindowSize(hwnd), 500); 
+        setTimeout(() => {
+             updateEmbeddedWindowSize(hwnd);
+             invoke('activate_window', { targetHwnd: hwnd });
+             // 双重保险：再次强制重绘
+             invoke('force_repaint', { targetHwnd: hwnd });
+        }, 500); 
         
       } catch (e) {
         console.error('Embed failed:', e);
@@ -594,6 +706,9 @@
     window.switchTab = async function(hwnd) {
       activeHwnd = hwnd;
       await invoke('activate_window', { targetHwnd: hwnd });
+      // 再次尝试激活，确保输入焦点
+      setTimeout(() => invoke('activate_window', { targetHwnd: hwnd }), 50);
+      
       updateEmbeddedWindowSize(hwnd); 
       renderTabs();
       closeSearchPanel(); // 切换标签时关闭搜索
@@ -601,10 +716,21 @@
 
     // 关闭标签
     window.closeTab = async function(hwnd) {
+      // 用户反馈：不需要确认弹窗，直接关闭
       try {
           await invoke('close_target_window', { targetHwnd: hwnd });
       } catch(e) {
           console.error("Close failed:", e);
+      }
+      removeWindowFromList(hwnd);
+    };
+
+    // 弹出标签 (Detach)
+    window.detachTab = async function(hwnd) {
+      try {
+          await invoke('release_window', { targetHwnd: hwnd });
+      } catch(e) {
+          console.error("Release failed:", e);
       }
       removeWindowFromList(hwnd);
     };
@@ -641,7 +767,8 @@
              onclick="window.switchTab(${w.hwnd})"
              title="${w.title}">
           <span class="tab-title">${truncate(w.title)}</span>
-          <button class="tab-close" onclick="event.stopPropagation(); window.closeTab(${w.hwnd})">✕</button>
+          <button class="tab-close" onclick="event.stopPropagation(); window.detachTab(${w.hwnd})" title="弹出窗口 (Ctrl+D)" style="margin-right:4px">⏏</button>
+          <button class="tab-close" onclick="event.stopPropagation(); window.closeTab(${w.hwnd})" title="关闭窗口">✕</button>
         </div>
       `).join('');
     }

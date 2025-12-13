@@ -14,7 +14,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 #[cfg(windows)]
 use windows::Win32::{
     Foundation::{BOOL, HWND, LPARAM, WPARAM, RECT, TRUE, POINT},
-    Graphics::Gdi::{InvalidateRect, ClientToScreen, ScreenToClient},
+    Graphics::Gdi::{InvalidateRect, ClientToScreen, ScreenToClient, RedrawWindow, RDW_ERASE, RDW_INVALIDATE, RDW_FRAME, RDW_ALLCHILDREN, RDW_UPDATENOW, RDW_INTERNALPAINT},
     UI::Input::KeyboardAndMouse::{GetAsyncKeyState, SetFocus},
     UI::WindowsAndMessaging::*,
     System::Threading::{GetCurrentProcessId, GetCurrentThreadId, AttachThreadInput},
@@ -60,8 +60,8 @@ unsafe fn get_class_name(hwnd: HWND) -> String {
 fn is_dangerous_window(class_name: &str) -> bool {
     // 这些窗口类型嵌入后可能导致系统不稳定
     let dangerous = [
-        "CabinetWClass",        // 文件资源管理器
-        "ExplorerWClass",       // 文件资源管理器变体
+        // "CabinetWClass",        // 文件资源管理器 (已允许)
+        // "ExplorerWClass",       // 文件资源管理器变体 (已允许)
         "Progman",              // 桌面
         "WorkerW",              // 桌面工作区
         "Shell_TrayWnd",        // 任务栏
@@ -169,6 +169,10 @@ fn embed_window(app: AppHandle, target_hwnd: isize) -> Result<bool, String> {
         let _ = activate_window(target_hwnd);
         
         println!("嵌入窗口成功: hwnd={}, class={}", target_hwnd, class_name);
+        
+        // 强制重绘，修复黑屏问题
+        let _ = force_repaint(target_hwnd);
+        
         Ok(true)
     }
     #[cfg(not(windows))]
@@ -246,24 +250,7 @@ fn update_window_rect(target_hwnd: isize, x: i32, y: i32, width: i32, height: i3
     Err("仅支持 Windows".to_string())
 }
 
-// 递归查找 Chrome_RenderWidgetHostHWND
-#[cfg(windows)]
-unsafe fn find_render_window(hwnd: HWND) -> Option<HWND> {
-    let mut target = None;
-    EnumChildWindows(hwnd, Some(find_render_window_callback), LPARAM(&mut target as *mut Option<HWND> as isize));
-    target
-}
 
-#[cfg(windows)]
-unsafe extern "system" fn find_render_window_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let target = &mut *(lparam.0 as *mut Option<HWND>);
-    let class_name = get_class_name(hwnd);
-    if class_name == "Chrome_RenderWidgetHostHWND" {
-        *target = Some(hwnd);
-        return BOOL(0);
-    }
-    TRUE
-}
 
 #[tauri::command]
 fn activate_window(target_hwnd: isize) -> Result<bool, String> {
@@ -286,15 +273,19 @@ fn activate_window(target_hwnd: isize) -> Result<bool, String> {
             false
         };
         
+        // 尝试强制前台
+        if IsIconic(hwnd).as_bool() {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+        
+        // 关键修复：使用 SetForegroundWindow 确保焦点
+        SetForegroundWindow(hwnd);
+        BringWindowToTop(hwnd);
+        
         SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
         
-        if let Some(render_hwnd) = find_render_window(hwnd) {
-            windows::Win32::UI::Input::KeyboardAndMouse::SetActiveWindow(render_hwnd);
-            SetFocus(render_hwnd);
-        } else {
-             windows::Win32::UI::Input::KeyboardAndMouse::SetActiveWindow(hwnd);
-             SetFocus(hwnd);
-        }
+        // 简化：直接聚焦主窗口，让应用自己决定内部焦点（解决地址栏无法输入问题）
+        SetFocus(hwnd);
         
         // 短暂延迟后断开，避免死锁
         if attached {
@@ -347,6 +338,11 @@ fn is_cursor_in_client_area(app: AppHandle, top_offset: i32) -> bool {
             Err(_) => return false,
         };
         let hwnd = HWND(hwnd_raw.0 as *mut _);
+
+        // 修复 Bug: 如果窗口被隐藏或最小化，直接返回 false，防止"幽灵嵌入"
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return false;
+        }
 
         let mut cursor_point = POINT::default();
         GetCursorPos(&mut cursor_point);
@@ -458,6 +454,27 @@ fn show_window(target_hwnd: isize) -> bool {
     false
 }
 
+// 强制重绘窗口 (修复黑屏)
+#[tauri::command]
+fn force_repaint(target_hwnd: isize) -> bool {
+    #[cfg(windows)]
+    unsafe {
+        let hwnd = HWND(target_hwnd as *mut _);
+        if !IsWindow(hwnd).as_bool() { return false; }
+        
+        // 方法1: InvalidateRect
+        let _ = InvalidateRect(hwnd, None, true);
+        
+        // 方法2: RedrawWindow (更强力)
+        let flags = RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_INTERNALPAINT;
+        let _ = RedrawWindow(hwnd, None, None, flags);
+        
+        true
+    }
+    #[cfg(not(windows))]
+    false
+}
+
 
 // ============================================================
 // 新功能：枚举已安装应用 & 启动应用
@@ -529,6 +546,7 @@ async fn launch_app(path: String) -> Result<isize, String> {
     {
         use std::process::Command;
         use std::time::Duration;
+        use std::os::windows::process::CommandExt; // 必须导入此 trait 才能使用 creation_flags
         
         // 获取启动前的窗口列表
         let before_windows: std::collections::HashSet<isize> = enumerate_windows()
@@ -536,15 +554,11 @@ async fn launch_app(path: String) -> Result<isize, String> {
             .map(|w| w.hwnd)
             .collect();
         
-        // 启动应用
-        let result = if path.ends_with(".lnk") {
-            // 使用 explorer 打开快捷方式
-            Command::new("cmd")
-                .args(["/C", "start", "", &path])
-                .spawn()
-        } else {
-            Command::new(&path).spawn()
-        };
+        // 统一使用 start 命令启动，支持 exe, lnk 以及普通文件(txt, ppt, etc)
+        let result = Command::new("cmd")
+            .args(["/C", "start", "", &path])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW (防止闪烁黑框)
+            .spawn();
         
         if let Err(e) = result {
             return Err(format!("启动失败: {}", e));
@@ -567,6 +581,56 @@ async fn launch_app(path: String) -> Result<isize, String> {
     }
     #[cfg(not(windows))]
     Err("仅支持 Windows".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileResult {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+#[tauri::command]
+fn search_files(query: String) -> Vec<FileResult> {
+    #[cfg(windows)]
+    {
+         if query.trim().is_empty() { return Vec::new(); }
+         
+         use walkdir::WalkDir;
+         use std::path::PathBuf;
+         
+         let mut results = Vec::new();
+         let query_lower = query.to_lowercase();
+         
+         // 搜索路径: 桌面, 文档, 下载
+         let mut search_paths = Vec::new();
+         if let Ok(p) = std::env::var("USERPROFILE") {
+            let user_profile = PathBuf::from(p);
+            search_paths.push(user_profile.join("Desktop"));
+            search_paths.push(user_profile.join("Downloads"));
+         }
+         
+         for path in search_paths {
+             if !path.exists() { continue; }
+             
+             for entry in WalkDir::new(path).max_depth(2).into_iter().filter_map(|e| e.ok()) {
+                 let file_name = entry.file_name().to_string_lossy();
+                 if file_name.to_lowercase().contains(&query_lower) {
+                     results.push(FileResult {
+                         name: file_name.to_string(),
+                         path: entry.path().to_string_lossy().to_string(),
+                         is_dir: entry.file_type().is_dir(),
+                     });
+                     if results.len() >= 20 { break; }
+                 }
+             }
+             if results.len() >= 20 { break; }
+         }
+         
+         results
+    }
+    #[cfg(not(windows))]
+    Vec::new()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -620,6 +684,13 @@ pub fn run() {
                      let _ = app.emit("open-search", ());
                      return;
                  }
+                 
+                 // Ctrl+D: 弹出当前窗口 (Detach)
+                 if s_lower == "control+keyd" {
+                     println!("[HANDLER] 发送事件: detach-current-tab");
+                     let _ = app.emit("detach-current-tab", ());
+                     return;
+                 }
 
                  // Alt+Space: Toggle Window
                  if s_lower == "alt+space" {
@@ -655,7 +726,9 @@ pub fn run() {
             hide_window,
             show_window,
             enumerate_installed_apps,
-            launch_app
+            launch_app,
+            search_files,
+            force_repaint
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -701,6 +774,12 @@ pub fn run() {
                 match app.global_shortcut().register("Ctrl+K") {
                     Ok(_) => println!("[SETUP] ✅ 注册成功: Ctrl+K"),
                     Err(e) => println!("[SETUP] ❌ 注册失败: Ctrl+K - {:?}", e),
+                }
+
+                // Ctrl+D: 弹出当前窗口
+                match app.global_shortcut().register("Ctrl+D") {
+                    Ok(_) => println!("[SETUP] ✅ 注册成功: Ctrl+D"),
+                    Err(e) => println!("[SETUP] ❌ 注册失败: Ctrl+D - {:?}", e),
                 }
 
                 // Alt+Space: Toggle
