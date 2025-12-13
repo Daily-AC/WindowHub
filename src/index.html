@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WindowHub</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      background-color: #1e1e2e;
+      color: #cdd6f4;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 标签栏 */
+    .tab-bar {
+      flex: 0 0 50px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 16px;
+      background-color: #181825;
+      border-bottom: 1px solid #313244;
+      overflow-x: visible; /* 允许下拉菜单溢出 */
+      white-space: nowrap;
+      position: relative;
+    }
+
+    .logo {
+      color: #89b4fa;
+      font-size: 16px;
+      font-weight: bold;
+      margin-right: 12px;
+    }
+    
+    .tabs-container {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        flex: 1;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+    .tabs-container::-webkit-scrollbar { display: none; }
+
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      background-color: #313244;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+      max-width: 200px;
+      min-width: 100px;
+      transition: background-color 0.2s;
+      user-select: none;
+    }
+
+    .tab:hover {
+      background-color: #45475a;
+    }
+
+    .tab.active {
+      background-color: #89b4fa;
+      color: #1e1e2e;
+      font-weight: bold;
+    }
+
+    .tab-title {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 13px;
+    }
+
+    .tab-close {
+      background: none;
+      border: none;
+      color: inherit;
+      cursor: pointer;
+      padding: 2px;
+      border-radius: 4px;
+      font-size: 14px;
+      line-height: 1;
+      opacity: 0.7;
+    }
+
+    .tab-close:hover {
+      background-color: rgba(255,255,255,0.2);
+      opacity: 1;
+    }
+
+    /* 居中搜索弹窗 */
+    .search-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(4px);
+        z-index: 10000;
+        display: none;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 15vh;
+    }
+    
+    .search-overlay.active {
+        display: flex;
+    }
+    
+    .search-panel {
+        width: 500px;
+        max-width: 90vw;
+        background-color: #1e1e2e;
+        border: 1px solid #45475a;
+        border-radius: 12px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        overflow: hidden;
+    }
+
+    .search-input {
+        width: 100%;
+        padding: 16px 20px;
+        background-color: transparent;
+        border: none;
+        border-bottom: 1px solid #313244;
+        color: #cdd6f4;
+        font-size: 16px;
+        outline: none;
+    }
+
+    .search-input::placeholder {
+        color: #6c7086;
+    }
+
+    .search-dropdown {
+        max-height: 350px;
+        overflow-y: auto;
+    }
+
+    .search-item {
+        padding: 12px 20px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border-bottom: 1px solid #313244;
+        color: #bac2de;
+        transition: background-color 0.1s;
+    }
+
+    .search-item:hover,
+    .search-item.selected {
+        background-color: #313244;
+        color: #fff;
+    }
+    
+    .search-item:last-child {
+        border-bottom: none;
+    }
+    
+    .search-item-title {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 14px;
+    }
+    
+    .search-item-app {
+        font-size: 11px;
+        color: #6c7086;
+    }
+    
+    .search-hint {
+        padding: 8px 20px;
+        font-size: 11px;
+        color: #6c7086;
+        background-color: #181825;
+        text-align: center;
+    }
+
+    /* 嵌入区域 */
+    .embed-area {
+      flex: 1;
+      position: relative;
+      background-color: #11111b; 
+      overflow: hidden;
+      width: 100%;
+    }
+
+    /* 欢迎页面 */
+    .welcome {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      text-align: center;
+      user-select: none;
+    }
+
+    .welcome h1 {
+      font-size: 64px;
+      margin-bottom: 16px;
+      animation: float 3s ease-in-out infinite;
+    }
+    
+    @keyframes float {
+        0% { transform: translateY(0px); }
+        50% { transform: translateY(-10px); }
+        100% { transform: translateY(0px); }
+    }
+
+    .welcome p {
+      color: #a6adc8;
+      margin-bottom: 32px;
+      font-size: 16px;
+    }
+    
+    .drag-hint {
+        border: 2px dashed #45475a;
+        padding: 40px;
+        border-radius: 16px;
+        color: #6c7086;
+    }
+    
+    /* 拖拽反馈覆盖层 */
+    .drag-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(137, 180, 250, 0.2);
+        border: 4px solid #89b4fa;
+        z-index: 9999;
+        display: none;
+        pointer-events: none;
+        align-items: center;
+        justify-content: center;
+    }
+    .drag-overlay.active {
+        display: flex;
+    }
+    .drag-overlay h2 {
+        color: #89b4fa;
+        background-color: #1e1e2e;
+        padding: 20px 40px;
+        border-radius: 12px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+  </style>
+</head>
+<body>
+  <div class="drag-overlay" id="drag-overlay">
+      <h2>✨ 松开鼠标嵌入窗口</h2>
+  </div>
+
+  <div class="tab-bar">
+    <div class="logo">🪟 WindowHub</div>
+    <div id="tabs" class="tabs-container"></div>
+  </div>
+  
+  <!-- 居中搜索弹窗 (Ctrl+K) -->
+  <div class="search-overlay" id="search-overlay">
+      <div class="search-panel">
+          <input type="text" class="search-input" id="search-input" placeholder="🔍 搜索并启动应用..." autofocus />
+          <div class="search-dropdown" id="search-dropdown"></div>
+          <div class="search-hint">↑↓ 选择 · Enter 确认 · Esc 取消</div>
+      </div>
+  </div>
+
+  <div class="embed-area" id="embed-area">
+    <div class="welcome">
+      <h1>👋</h1>
+      <h2>WindowHub</h2>
+      <p>工作流聚合工具</p>
+      <div class="drag-hint">
+          将窗口拖拽至此
+          <br>或使用右上角搜索添加
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.onerror = function(msg, url, line, col, error) {
+       alert("🚨 全局错误:\n" + msg + "\n行号: " + line + "\n列号: " + col + "\n错误: " + error);
+       return false;
+    };
+    window.addEventListener('unhandledrejection', function(event) {
+        alert("🚨 未捕获的 Promise 异常:\n" + event.reason);
+    });
+  </script>
+
+  <script type="module">
+    const { invoke } = window.__TAURI__.core;
+    const { listen } = window.__TAURI__.event;
+
+    let embeddedWindows = []; // [{hwnd, title}]
+    let activeHwnd = null;
+    let isDragging = false;
+    let dragEnterTime = 0;
+    
+    const embedArea = document.getElementById('embed-area');
+    const tabsContainer = document.getElementById('tabs');
+    const welcomeScreen = document.querySelector('.welcome');
+    const dragOverlay = document.getElementById('drag-overlay');
+    const searchInput = document.getElementById('search-input');
+    const searchDropdown = document.getElementById('search-dropdown');
+    // Ensure searchOverlay is available globally if possible, or duplicate logic
+    const searchOverlay = document.getElementById('search-overlay');
+
+    // -----------------------------------------------------------
+    // 初始化
+    // -----------------------------------------------------------
+    async function init() {
+        try {
+            console.log("Initializing...");
+            startDragDetection();
+            setupResizeObserver();
+            setupSearch();
+            setupShortcuts();
+            document.addEventListener('keydown', handleKeydown); 
+            startDaemon(); // 启动守护进程
+            console.log("Init complete.");
+        } catch(e) {
+            alert("❌ Init 失败: " + e);
+        }
+    }
+    
+    // 延迟执行 init 以确保 DOM 完全就绪 (虽然 module 脚本通常已就绪)
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+
+    // 全局快捷键监听 (来自 Rust 事件)
+    async function setupShortcuts() {
+        // Alt+1~9: 切换到指定标签
+        await listen('switch-tab', (event) => {
+            const index = event.payload - 1;
+            if (index >= 0 && index < embeddedWindows.length) {
+                switchTab(embeddedWindows[index].hwnd);
+            }
+        });
+        
+        // Ctrl+W: 关闭当前标签
+        await listen('close-current-tab', () => {
+            if (activeHwnd) {
+                closeTab(activeHwnd);
+            }
+        });
+        
+        // Ctrl+Tab: 下一个标签
+        await listen('next-tab', () => {
+            if (embeddedWindows.length <= 1) return;
+            const currentIndex = embeddedWindows.findIndex(w => w.hwnd === activeHwnd);
+            const nextIndex = (currentIndex + 1) % embeddedWindows.length;
+            switchTab(embeddedWindows[nextIndex].hwnd);
+        });
+        
+        // Ctrl+Shift+Tab: 上一个标签
+        await listen('prev-tab', () => {
+            if (embeddedWindows.length <= 1) return;
+            const currentIndex = embeddedWindows.findIndex(w => w.hwnd === activeHwnd);
+            const prevIndex = (currentIndex - 1 + embeddedWindows.length) % embeddedWindows.length;
+            switchTab(embeddedWindows[prevIndex].hwnd);
+        });
+        
+        // Ctrl+K: 打开搜索弹窗
+        await listen('open-search', () => {
+            openSearchPanel();
+        });
+    }
+
+    // -----------------------------------------------------------
+    // 核心逻辑: 搜索功能 (弹窗模式)
+    // -----------------------------------------------------------
+    let selectedSearchIndex = -1;
+
+    
+    // 打开搜索面板
+    async function openSearchPanel() {
+        // 1. 隐藏所有嵌入窗口
+        for (const w of embeddedWindows) {
+            await invoke('hide_window', { targetHwnd: w.hwnd });
+        }
+        
+        // 2. 显示搜索弹窗
+        searchOverlay.classList.add('active');
+        searchInput.value = '';
+        searchInput.focus();
+        selectedSearchIndex = -1;
+        
+        // 3. 加载应用列表
+        await performSearch('');
+    }
+    
+    // 关闭搜索面板
+    async function closeSearchPanel() {
+        searchOverlay.classList.remove('active');
+        searchDropdown.innerHTML = '';
+        
+        // 恢复所有嵌入窗口
+        for (const w of embeddedWindows) {
+            await invoke('show_window', { targetHwnd: w.hwnd });
+        }
+        
+        // 重新激活当前窗口
+        if (activeHwnd) {
+            await invoke('activate_window', { targetHwnd: activeHwnd });
+        }
+    }
+    
+    function setupSearch() {
+        let debounceTimer;
+        
+        // 输入事件
+        searchInput.addEventListener('input', (e) => {
+            selectedSearchIndex = -1;
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                performSearch(e.target.value);
+            }, 200);
+        });
+        
+        // 键盘导航
+        searchInput.addEventListener('keydown', (e) => {
+            const items = searchDropdown.querySelectorAll('.search-item');
+            
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (items.length > 0) {
+                    selectedSearchIndex = Math.min(selectedSearchIndex + 1, items.length - 1);
+                    updateSearchSelection(items);
+                }
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (items.length > 0) {
+                    selectedSearchIndex = Math.max(selectedSearchIndex - 1, 0);
+                    updateSearchSelection(items);
+                }
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (selectedSearchIndex >= 0 && selectedSearchIndex < items.length) {
+                    items[selectedSearchIndex].click();
+                } else if (items.length > 0) {
+                    items[0].click();
+                }
+            } else if (e.key === 'Escape') {
+                closeSearchPanel();
+            }
+        });
+        
+        // 点击遮罩层关闭
+        searchOverlay.addEventListener('click', (e) => {
+            if (e.target === searchOverlay) {
+                closeSearchPanel();
+            }
+        });
+    }
+
+    
+    function updateSearchSelection(items) {
+        items.forEach((item, i) => {
+            if (i === selectedSearchIndex) {
+                item.style.backgroundColor = '#45475a';
+                item.scrollIntoView({ block: 'nearest' });
+            } else {
+                item.style.backgroundColor = '';
+            }
+        });
+    }
+    
+    async function performSearch(query) {
+        try {
+            searchDropdown.innerHTML = '<div style="padding:10px;color:#6c7086;text-align:center">🔍 正在搜索应用...</div>';
+            searchDropdown.classList.add('show');
+            
+            // 只搜索已安装应用
+            const apps = await invoke('enumerate_installed_apps');
+            
+            // 过滤应用
+            const filteredApps = query 
+                ? apps.filter(a => a.name.toLowerCase().includes(query.toLowerCase()))
+                : apps.slice(0, 15);
+                
+            if (filteredApps.length === 0) {
+                searchDropdown.innerHTML = '<div style="padding:10px;color:#6c7086;text-align:center">未找到匹配的应用</div>';
+                return;
+            }
+            
+            // 使用 data-* 属性存储路径，避免特殊字符问题
+            searchDropdown.innerHTML = filteredApps.slice(0, 15).map((a, i) => `
+                <div class="search-item" data-path="${btoa(encodeURIComponent(a.path))}" data-name="${escapeHtml(a.name)}" onclick="window.handleAppClick(this)">
+                    <div style="font-size:16px">🔹</div>
+                    <div style="flex:1;overflow:hidden;">
+                        <div class="search-item-title">${escapeHtml(a.name)}</div>
+                        <div class="search-item-app" style="font-size:10px;opacity:0.6">${escapeHtml(a.path.split('\\').pop())}</div>
+                    </div>
+                </div>
+            `).join('');
+            
+        } catch(e) {
+            console.error(e);
+            searchDropdown.innerHTML = `<div style="padding:10px;color:red;">搜索错误: ${e}</div>`;
+        }
+    }
+    
+    // 处理应用点击
+    window.handleAppClick = function(el) {
+        const encodedPath = el.dataset.path;
+        const name = el.dataset.name;
+        const path = decodeURIComponent(atob(encodedPath));
+        launchAndEmbed(path, name);
+    };
+    
+    // 启动应用并嵌入
+    window.launchAndEmbed = async function(path, name) {
+        closeSearchPanel();
+        
+        // 显示启动提示
+        const overlay = document.getElementById('drag-overlay');
+        overlay.querySelector('h2').textContent = `🚀 正在启动 ${name}...`;
+        overlay.classList.add('active');
+        
+        try {
+            const hwnd = await invoke('launch_app', { path });
+            overlay.classList.remove('active');
+            
+            if (hwnd > 0) {
+                await embedWindow(hwnd, name);
+            }
+        } catch (e) {
+            overlay.classList.remove('active');
+            alert('❌ ' + e);
+        }
+    };
+
+    // -----------------------------------------------------------
+    // 核心逻辑: 嵌入与标签
+    // -----------------------------------------------------------
+    
+    // 嵌入窗口
+    window.embedWindow = async function(hwnd, title) {
+      // 检查是否已嵌入
+      if (embeddedWindows.find(w => w.hwnd === hwnd)) {
+          switchTab(hwnd);
+          closeSearchPanel();
+          return;
+      }
+      
+      try {
+        await invoke('embed_window', { targetHwnd: hwnd });
+        
+        embeddedWindows.push({ hwnd, title });
+        activeHwnd = hwnd;
+        
+        renderTabs();
+        updateUIState();
+        
+        closeSearchPanel();
+        
+        // 延时重置大小，确保渲染正确
+        setTimeout(() => updateEmbeddedWindowSize(hwnd), 100);
+        setTimeout(() => updateEmbeddedWindowSize(hwnd), 500); 
+        
+      } catch (e) {
+        console.error('Embed failed:', e);
+        if (e.includes("自身")) {
+            alert('🚫 不能嵌入 WindowHub 自己！');
+        } else {
+            alert('❌ 嵌入失败: ' + e);
+        }
+      }
+    };
+
+    // 切换标签
+    window.switchTab = async function(hwnd) {
+      activeHwnd = hwnd;
+      await invoke('activate_window', { targetHwnd: hwnd });
+      updateEmbeddedWindowSize(hwnd); 
+      renderTabs();
+      closeSearchPanel(); // 切换标签时关闭搜索
+    };
+
+    // 关闭标签
+    window.closeTab = async function(hwnd) {
+      try {
+          await invoke('close_target_window', { targetHwnd: hwnd });
+      } catch(e) {
+          console.error("Close failed:", e);
+      }
+      removeWindowFromList(hwnd);
+    };
+    
+    function removeWindowFromList(hwnd) {
+      embeddedWindows = embeddedWindows.filter(w => w.hwnd !== hwnd);
+      if (activeHwnd === hwnd) {
+          if (embeddedWindows.length > 0) {
+              const next = embeddedWindows[embeddedWindows.length - 1];
+              switchTab(next.hwnd);
+          } else {
+              activeHwnd = null;
+          }
+      }
+      renderTabs();
+      updateUIState();
+    }
+    
+
+
+    // 更新 UI 状态
+    function updateUIState() {
+        if (embeddedWindows.length === 0) {
+            welcomeScreen.style.display = 'flex';
+        } else {
+            welcomeScreen.style.display = 'none';
+        }
+    }
+
+    // 渲染标签
+    function renderTabs() {
+      tabsContainer.innerHTML = embeddedWindows.map(w => `
+        <div class="tab ${w.hwnd === activeHwnd ? 'active' : ''}" 
+             onclick="window.switchTab(${w.hwnd})"
+             title="${w.title}">
+          <span class="tab-title">${truncate(w.title)}</span>
+          <button class="tab-close" onclick="event.stopPropagation(); window.closeTab(${w.hwnd})">✕</button>
+        </div>
+      `).join('');
+    }
+    
+    function truncate(str) {
+        return str.length > 15 ? str.slice(0, 12) + '...' : str;
+    }
+    
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    }
+
+    // -----------------------------------------------------------
+    // 守护进程：存活检查 + 位置锁定
+    // -----------------------------------------------------------
+    function startDaemon() {
+        setInterval(async () => {
+             for (const win of [...embeddedWindows]) {
+                 const alive = await invoke('is_window_valid', { targetHwnd: win.hwnd });
+                 if (!alive) {
+                     removeWindowFromList(win.hwnd);
+                 }
+             }
+
+             if (activeHwnd) {
+                 updateEmbeddedWindowSize(activeHwnd);
+             }
+        }, 200);
+    }
+    startDaemon();
+
+    // -----------------------------------------------------------
+    // 拖拽检测 (Rust 辅助)
+    // -----------------------------------------------------------
+    let mainHwnd = null;
+    async function getMainHwnd() {
+        if (!mainHwnd) { mainHwnd = await invoke('get_main_window_hwnd'); }
+        return mainHwnd;
+    }
+
+    function startDragDetection() {
+        setInterval(async () => {
+            try {
+                const isMouseDown = await invoke('is_mouse_left_down');
+                if (!isDragging && !isMouseDown) return;
+
+                const fgHwnd = await invoke('get_foreground_window');
+                const myHwnd = await getMainHwnd();
+                
+                if (fgHwnd === myHwnd || isEmbedded(fgHwnd)) {
+                    if (isDragging) {
+                        isDragging = false;
+                        dragOverlay.classList.remove('active');
+                    }
+                    return;
+                }
+
+                const isOver = await invoke('is_cursor_in_client_area', { topOffset: 50 });
+                
+                if (isMouseDown && isOver) {
+                    if (!isDragging) {
+                        isDragging = true;
+                        dragEnterTime = Date.now();
+                        dragOverlay.classList.add('active');
+                    }
+                } else {
+                    if (isDragging) { 
+                        isDragging = false;
+                        dragOverlay.classList.remove('active');
+                        
+                        if (isOver && !isMouseDown && (Date.now() - dragEnterTime > 200)) {
+                             const title = await invoke('get_window_title', { targetHwnd: fgHwnd });
+                             if (title) {
+                                 embedWindow(fgHwnd, title);
+                             }
+                        }
+                    }
+                }
+            } catch (e) { }
+        }, 100);
+    }
+    
+    function isEmbedded(hwnd) {
+        return embeddedWindows.some(w => w.hwnd === hwnd);
+    }
+
+    // -----------------------------------------------------------
+    // 自适应大小
+    // -----------------------------------------------------------
+    function setupResizeObserver() {
+        let resizeTimeout;
+        const resizeObserver = new ResizeObserver(() => {
+            if (!activeHwnd) return;
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(async () => {
+                await updateEmbeddedWindowSize(activeHwnd);
+                if (activeHwnd) {
+                   await invoke('activate_window', { targetHwnd: activeHwnd });
+                }
+            }, 50);
+        });
+        resizeObserver.observe(embedArea);
+    }
+    
+    async function updateEmbeddedWindowSize(hwnd) {
+        const rect = embedArea.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        
+        const physicalX = Math.round(rect.left * dpr);
+        const physicalY = Math.round(rect.top * dpr);
+        const physicalWidth = Math.round(rect.width * dpr);
+        const physicalHeight = Math.round(rect.height * dpr);
+
+        try {
+            await invoke('update_window_rect', { 
+                targetHwnd: hwnd, 
+                x: physicalX,
+                y: physicalY,
+                width: physicalWidth, 
+                height: physicalHeight
+            });
+        } catch(e) { console.error(e); }
+    }
+
+    // 辅助功能
+    function handleKeydown(e) {
+        // 保留原有的 Ctrl+1-9 支持（仅窗口聚焦时）
+        if (e.ctrlKey && e.key >= '1' && e.key <= '9') {
+            const index = parseInt(e.key) - 1;
+            if (index < embeddedWindows.length) {
+                switchTab(embeddedWindows[index].hwnd);
+            }
+        }
+    }
+  </script>
+</body>
+</html>
