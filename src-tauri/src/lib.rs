@@ -15,7 +15,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use windows::Win32::{
     Foundation::{BOOL, HWND, LPARAM, WPARAM, RECT, TRUE, POINT},
     Graphics::Gdi::{InvalidateRect, ClientToScreen, ScreenToClient, RedrawWindow, RDW_ERASE, RDW_INVALIDATE, RDW_FRAME, RDW_ALLCHILDREN, RDW_UPDATENOW, RDW_INTERNALPAINT},
-    UI::Input::KeyboardAndMouse::{GetAsyncKeyState, SetFocus},
+    UI::Input::KeyboardAndMouse::{GetAsyncKeyState, SetFocus, SetActiveWindow},
     UI::WindowsAndMessaging::*,
     System::Threading::{GetCurrentProcessId, GetCurrentThreadId, AttachThreadInput},
 };
@@ -159,12 +159,12 @@ fn embed_window(app: AppHandle, target_hwnd: isize) -> Result<bool, String> {
         
         let new_style = (original_style as u32 
             & !(WS_CAPTION.0 | WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0 | WS_POPUP.0 | WS_BORDER.0 | WS_DLGFRAME.0))
-            | WS_CHILD.0 | WS_VISIBLE.0;
+            | WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPSIBLINGS.0;
 
         SetWindowLongW(hwnd, GWL_STYLE, new_style as i32);
         SetParent(hwnd, parent);
         
-        SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
 
         let _ = activate_window(target_hwnd);
         
@@ -284,13 +284,24 @@ fn activate_window(target_hwnd: isize) -> Result<bool, String> {
         
         SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
         
-        // 简化：直接聚焦主窗口，让应用自己决定内部焦点（解决地址栏无法输入问题）
+        // 关键修复：发送 WM_NCACTIVATE 欺骗窗口它已被激活 (对 Chrome/VSCode/Electron 应用至关重要)
+        let _ = PostMessageW(hwnd, WM_NCACTIVATE, WPARAM(1), LPARAM(0));
+        
+        // 新增修复：发送 WM_ACTIVATE (WA_ACTIVE=1) 欺骗客户区它已被激活 (针对飞书/Electron/游戏)
+        let _ = PostMessageW(hwnd, WM_ACTIVATE, WPARAM(1), LPARAM(0));
+        
+        // 关键修复：不仅 SetFocus，还要 SetActiveWindow，确保输入法上下文被激活
+        let _ = SetActiveWindow(hwnd);
         SetFocus(hwnd);
         
-        // 短暂延迟后断开，避免死锁
+        // 再次强制重绘，确保激活状态正确显示
+        let _ = RedrawWindow(hwnd, None, None, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+        
+        // 紧急回滚：永久连接导致了所有输入法失效 (死锁或队列冲突)。
+        // 恢复断开逻辑，但适当延长到 200ms 以给 TSF 更多初始化时间。
         if attached {
             std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(std::time::Duration::from_millis(200));
                 unsafe { let _ = AttachThreadInput(id_current, id_target, false); }
             });
         }

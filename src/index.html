@@ -162,13 +162,13 @@
 
     .search-input {
         width: 100%;
-        padding: 16px 20px;
-        background-color: transparent;
+        padding: 16px;
+        font-size: 20px;
         border: none;
-        border-bottom: 1px solid #313244;
-        color: #cdd6f4;
-        font-size: 16px;
         outline: none;
+        color: #cdd6f4;
+        background-color: #1e1e2e; /* 必须是实心背景，帮助 IME 定位 */
+        border-bottom: 1px solid #313244;
     }
 
     .search-input::placeholder {
@@ -420,16 +420,33 @@
         init();
     }
 
-    // 关键优化：当 WindowHub 窗口本身获得焦点时（例如拖拽结束、点击标题栏），自动把焦点"回传"给当前嵌入的应用
+    // 关键优化：当 WindowHub 窗口本身获得焦点时（例如拖拽结束、点击标题栏），自动把焦点"回传"
     window.addEventListener('focus', async () => {
-         // 如果搜索框打开，不要乱抢焦点
-         if (document.getElementById('search-overlay').classList.contains('active')) return;
+         const searchActive = document.getElementById('search-overlay').classList.contains('active');
+         
+         // 场景1: 搜索框打开时，移动窗口后重新聚焦搜索框 (修复 IME 丢失)
+         if (searchActive) {
+             console.log("Restoring focus to Search Input...");
+             document.getElementById('search-input').focus();
+             return;
+         }
+         
+         // 场景2: 搜索框未打开，且有嵌入窗口，聚焦嵌入窗口
          if (document.getElementById('error-overlay').classList.contains('active')) return;
 
          if (activeHwnd) {
              console.log("Restoring focus to embedded app...");
              await invoke('activate_window', { targetHwnd: activeHwnd });
          }
+    });
+
+    // 监听重新调整大小，也强制聚焦搜索框 (修复 resize 后 IME 丢失)
+    window.addEventListener('resize', () => {
+         if (document.getElementById('search-overlay').classList.contains('active')) {
+             document.getElementById('search-input').focus();
+         }
+         // 同时也让嵌入窗口适应新大小
+         if (activeHwnd) updateEmbeddedWindowSize(activeHwnd);
     });
 
     // 全局快捷键监听 (来自 Rust 事件)
@@ -486,7 +503,9 @@
     
     // 打开搜索面板
     async function openSearchPanel() {
-        // 1. 隐藏所有嵌入窗口
+        if (searchOverlay.classList.contains('active')) return;
+        
+        // 1. 隐藏所有嵌入窗口 (防止 Z-Index 遮挡)
         for (const w of embeddedWindows) {
             await invoke('hide_window', { targetHwnd: w.hwnd });
         }
@@ -494,10 +513,16 @@
         // 2. 显示搜索弹窗
         searchOverlay.classList.add('active');
         searchInput.value = '';
-        searchInput.focus();
-        selectedSearchIndex = -1;
+        searchDropdown.innerHTML = '';
+        searchDropdown.classList.remove('show');
         
-        // 3. 加载应用列表
+        // 关键修复：延迟聚焦，等待布局稳定，确保 IME 坐标正确
+        setTimeout(() => {
+            searchInput.focus();
+        }, 50);
+        
+        // 3. 加载默认列表
+        selectedSearchIndex = -1;
         await performSearch('');
     }
     
