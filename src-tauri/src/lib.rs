@@ -229,6 +229,44 @@ fn release_window(target_hwnd: isize) -> Result<bool, String> {
     Err("仅支持 Windows".to_string())
 }
 
+/// 释放所有嵌入窗口 (用于程序退出时的同步清理)
+#[cfg(windows)]
+fn release_all_embedded_windows() {
+    unsafe {
+        let styles = ORIGINAL_STYLES.lock().unwrap();
+        println!("[清理] 释放 {} 个嵌入窗口", styles.len());
+        
+        for (target_hwnd, original_style, original_exstyle, rect) in styles.iter() {
+            let hwnd = HWND(*target_hwnd as *mut _);
+            
+            if !IsWindow(hwnd).as_bool() {
+                continue;
+            }
+            
+            // 断开线程连接
+            let id_current = GetCurrentThreadId();
+            let id_target = GetWindowThreadProcessId(hwnd, None);
+            if id_current != id_target {
+                let _ = AttachThreadInput(id_current, id_target, false);
+            }
+            
+            // 移除父窗口关系
+            let _ = SetParent(hwnd, HWND(0 as _));
+            
+            // 恢复原始样式
+            SetWindowLongW(hwnd, GWL_STYLE, *original_style);
+            SetWindowLongW(hwnd, GWL_EXSTYLE, *original_exstyle);
+            
+            // 恢复原始位置和大小
+            let width = rect.right - rect.left;
+            let height = rect.bottom - rect.top;
+            SetWindowPos(hwnd, HWND_TOP, rect.left, rect.top, width, height, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+    }
+}
+
 #[tauri::command]
 fn update_window_rect(target_hwnd: isize, x: i32, y: i32, width: i32, height: i32) -> Result<bool, String> {
     #[cfg(windows)]
@@ -910,8 +948,10 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // 关闭窗口时，通知前端释放所有嵌入窗口
-                let _ = window.emit("release-all-windows", ());
+                // 关闭窗口时，同步释放所有嵌入窗口 (防止冻结)
+                #[cfg(windows)]
+                release_all_embedded_windows();
+                
                 window.hide().unwrap();
                 api.prevent_close();
             }
