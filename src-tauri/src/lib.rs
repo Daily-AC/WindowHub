@@ -910,6 +910,8 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
+                // 关闭窗口时，通知前端释放所有嵌入窗口
+                let _ = window.emit("release-all-windows", ());
                 window.hide().unwrap();
                 api.prevent_close();
             }
@@ -918,6 +920,9 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                
+                // 加载已保存的工作区
+                load_workspaces_from_file();
                 
                 println!("[SETUP] 开始注册全局快捷键...");
                 

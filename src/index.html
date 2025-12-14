@@ -651,6 +651,20 @@
                 detachTab(activeHwnd);
             }
         });
+        
+        // 窗口关闭时释放所有嵌入窗口（防止冻结）
+        await listen('release-all-windows', async () => {
+            console.log('释放所有嵌入窗口...');
+            for (const w of [...embeddedWindows]) {
+                try {
+                    await invoke('release_window', { targetHwnd: w.hwnd });
+                } catch(e) {
+                    console.warn('释放窗口失败:', w.hwnd, e);
+                }
+            }
+            embeddedWindows.length = 0;
+            activeHwnd = null;
+        });
     }
 
     // -----------------------------------------------------------
