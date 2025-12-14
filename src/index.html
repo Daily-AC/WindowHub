@@ -292,6 +292,137 @@
         border-radius: 12px;
         box-shadow: 0 10px 30px rgba(0,0,0,0.5);
     }
+    
+    /* 工作区全屏覆盖弹窗 (类似搜索框) */
+    .workspace-container {
+        margin-left: auto;
+    }
+    .workspace-btn {
+        background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%);
+        border: none;
+        padding: 8px 16px;
+        border-radius: 8px;
+        color: #1e1e2e;
+        font-weight: bold;
+        cursor: pointer;
+        font-size: 13px;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .workspace-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(137,180,250,0.4);
+    }
+    .workspace-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: rgba(0, 0, 0, 0.7);
+        z-index: 10000;
+        display: none;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 12vh;
+    }
+    .workspace-overlay.active { display: flex; }
+    .workspace-panel {
+        background-color: #1e1e2e;
+        border: 1px solid #45475a;
+        border-radius: 16px;
+        width: 400px;
+        max-width: 90vw;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+        overflow: hidden;
+        animation: slideDown 0.2s ease-out;
+    }
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .workspace-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 20px;
+        background-color: #11111b;
+        border-bottom: 1px solid #313244;
+    }
+    .workspace-header h3 {
+        margin: 0;
+        font-size: 16px;
+        color: #cdd6f4;
+    }
+    .workspace-close {
+        background: none;
+        border: none;
+        color: #6c7086;
+        font-size: 20px;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 6px;
+    }
+    .workspace-close:hover { background-color: #313244; color: #f38ba8; }
+    .workspace-list {
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    .workspace-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 20px;
+        cursor: pointer;
+        transition: background-color 0.15s;
+        border-bottom: 1px solid #313244;
+    }
+    .workspace-item:hover { background-color: #313244; }
+    .workspace-item:last-child { border-bottom: none; }
+    .workspace-item-icon { font-size: 20px; }
+    .workspace-item-info { flex: 1; }
+    .workspace-item-name { font-weight: 500; margin-bottom: 2px; }
+    .workspace-item-count { font-size: 11px; color: #6c7086; }
+    .workspace-item-delete {
+        opacity: 0; cursor: pointer; color: #f38ba8;
+        background: none; border: none; font-size: 16px;
+        padding: 4px 8px; border-radius: 4px;
+    }
+    .workspace-item:hover .workspace-item-delete { opacity: 1; }
+    .workspace-item-delete:hover { background-color: rgba(243,139,168,0.2); }
+    .workspace-footer {
+        padding: 16px 20px;
+        border-top: 1px solid #313244;
+    }
+    .workspace-save-btn {
+        display: block;
+        width: 100%;
+        padding: 12px;
+        border-radius: 10px;
+        border: 2px dashed #45475a;
+        background: transparent;
+        color: #89b4fa;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+    .workspace-save-btn:hover {
+        background-color: rgba(137,180,250,0.15);
+        border-color: #89b4fa;
+    }
+    .workspace-empty {
+        padding: 40px 20px;
+        text-align: center;
+        color: #6c7086;
+    }
+    .workspace-empty-icon { font-size: 40px; margin-bottom: 12px; }
+    .workspace-hint {
+        padding: 12px 20px;
+        text-align: center;
+        font-size: 11px;
+        color: #6c7086;
+        background-color: #11111b;
+    }
   </style>
 </head>
 <body>
@@ -302,6 +433,26 @@
   <div class="tab-bar">
     <div class="logo">🪟 WindowHub</div>
     <div id="tabs" class="tabs-container"></div>
+    
+    <!-- 工作区按钮 -->
+    <div class="workspace-container">
+        <button class="workspace-btn" onclick="openWorkspacePanel()">📁 工作区</button>
+    </div>
+  </div>
+
+  <!-- 工作区全屏弹窗 -->
+  <div class="workspace-overlay" id="workspace-overlay">
+      <div class="workspace-panel">
+          <div class="workspace-header">
+              <h3>📁 工作区管理</h3>
+              <button class="workspace-close" onclick="closeWorkspacePanel()">✕</button>
+          </div>
+          <div class="workspace-list" id="workspace-list"></div>
+          <div class="workspace-footer">
+              <button class="workspace-save-btn" onclick="saveCurrentWorkspace()">➕ 保存当前会话为工作区</button>
+          </div>
+          <div class="workspace-hint">点击工作区名称可一键恢复所有应用 · Esc 关闭</div>
+      </div>
   </div>
   
   <!-- 居中搜索弹窗 (Ctrl+K) -->
@@ -423,6 +574,13 @@
     // 关键优化：当 WindowHub 窗口本身获得焦点时（例如拖拽结束、点击标题栏），自动把焦点"回传"
     window.addEventListener('focus', async () => {
          const searchActive = document.getElementById('search-overlay').classList.contains('active');
+         const workspaceActive = document.getElementById('workspace-overlay').classList.contains('active');
+         
+         // 场景0: 工作区下拉菜单打开时，不要恢复嵌入窗口
+         if (workspaceActive) {
+              console.log("Workspace dropdown active, skipping focus restore");
+              return;
+         }
          
          // 场景1: 搜索框打开时，移动窗口后重新聚焦搜索框 (修复 IME 丢失)
          if (searchActive) {
@@ -929,6 +1087,151 @@
             }
         }
     }
+
+    // -----------------------------------------------------------
+    // 工作区 (Workspace) 功能 - 全屏弹窗模式
+    // -----------------------------------------------------------
+    const workspaceOverlay = document.getElementById('workspace-overlay');
+    const workspaceList = document.getElementById('workspace-list');
+
+    // 打开工作区面板
+    window.openWorkspacePanel = async function() {
+        if (workspaceOverlay.classList.contains('active')) return;
+        
+        console.log('[Workspace] Opening panel');
+        
+        // 先标记为活跃状态，阻止 focus 监听器恢复窗口
+        workspaceOverlay.classList.add('active');
+        loadWorkspaces();
+        
+        // 然后隐藏嵌入窗口
+        for (const w of embeddedWindows) {
+            await invoke('hide_window', { targetHwnd: w.hwnd });
+        }
+    };
+
+    // 关闭工作区面板
+    window.closeWorkspacePanel = async function() {
+        workspaceOverlay.classList.remove('active');
+        
+        // 恢复嵌入窗口
+        for (const w of embeddedWindows) {
+            await invoke('show_window', { targetHwnd: w.hwnd });
+        }
+        if (activeHwnd) {
+            await invoke('activate_window', { targetHwnd: activeHwnd });
+        }
+    };
+
+    // 点击遮罩层关闭
+    workspaceOverlay.addEventListener('click', (e) => {
+        if (e.target === workspaceOverlay) {
+            closeWorkspacePanel();
+        }
+    });
+
+    // Esc 关闭面板
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && workspaceOverlay.classList.contains('active')) {
+            closeWorkspacePanel();
+        }
+    });
+
+    // 加载工作区列表
+    async function loadWorkspaces() {
+        try {
+            const workspaces = await invoke('get_workspaces');
+            if (workspaces.length === 0) {
+                workspaceList.innerHTML = `
+                    <div class="workspace-empty">
+                        <div class="workspace-empty-icon">📂</div>
+                        暂无保存的工作区<br>
+                        <span style="font-size: 12px;">点击下方按钮保存当前会话</span>
+                    </div>`;
+                return;
+            }
+            workspaceList.innerHTML = workspaces.map(ws => `
+                <div class="workspace-item" onclick="restoreWorkspace('${escapeHtml(ws.name)}')">
+                    <span class="workspace-item-icon">🗂️</span>
+                    <div class="workspace-item-info">
+                        <div class="workspace-item-name">${escapeHtml(ws.name)}</div>
+                        <div class="workspace-item-count">${ws.apps.length} 个应用</div>
+                    </div>
+                    <button class="workspace-item-delete" onclick="event.stopPropagation(); deleteWorkspace('${escapeHtml(ws.name)}')" title="删除">🗑️</button>
+                </div>
+            `).join('');
+        } catch(e) {
+            console.error('加载工作区失败:', e);
+            workspaceList.innerHTML = '<div class="workspace-empty">加载失败</div>';
+        }
+    }
+
+    // 保存当前会话为工作区
+    window.saveCurrentWorkspace = async function() {
+        if (embeddedWindows.length === 0) {
+            window.showError('当前没有嵌入的窗口，无法保存工作区');
+            return;
+        }
+        
+        const name = prompt('请为工作区命名:', `工作区 ${new Date().toLocaleDateString()}`);
+        if (!name || !name.trim()) return;
+        
+        try {
+            const hwnds = embeddedWindows.map(w => w.hwnd);
+            await invoke('save_workspace', { name: name.trim(), hwnds });
+            closeWorkspacePanel();
+            console.log('工作区保存成功:', name);
+        } catch(e) {
+            window.showError('保存失败: ' + e);
+        }
+    };
+
+    // 删除工作区
+    window.deleteWorkspace = async function(name) {
+        if (!confirm(`确定要删除工作区 "${name}" 吗？`)) return;
+        
+        try {
+            await invoke('delete_workspace', { name });
+            loadWorkspaces();
+        } catch(e) {
+            window.showError('删除失败: ' + e);
+        }
+    };
+
+    // 恢复工作区
+    window.restoreWorkspace = async function(name) {
+        closeWorkspacePanel();
+        
+        try {
+            const apps = await invoke('restore_workspace', { name });
+            console.log('恢复工作区:', name, apps);
+            
+            for (const path of apps) {
+                try {
+                    console.log('启动应用:', path);
+                    const hwnd = await invoke('launch_app', { path });
+                    console.log('launch_app 返回:', hwnd);
+                    
+                    if (hwnd > 0) {
+                        const title = await invoke('get_window_title', { targetHwnd: hwnd });
+                        console.log('嵌入窗口:', hwnd, title);
+                        await embedWindow(hwnd, title || path.split('\\').pop());
+                    } else {
+                        console.warn('无效的 hwnd:', hwnd);
+                    }
+                } catch(appErr) {
+                    // 可能是单实例应用已在运行，启动命令失败
+                    console.warn('启动应用失败:', path, appErr);
+                    // TODO: 未来可以尝试查找该应用的现有窗口
+                }
+                
+                // 每个应用之间稍微延迟，避免竞争
+                await new Promise(r => setTimeout(r, 500));
+            }
+        } catch(e) {
+            window.showError('恢复工作区失败: ' + e);
+        }
+    };
   </script>
 </body>
 </html>
