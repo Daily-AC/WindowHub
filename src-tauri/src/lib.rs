@@ -17,10 +17,24 @@ use windows::Win32::{
     Graphics::Gdi::{InvalidateRect, ClientToScreen, ScreenToClient, RedrawWindow, RDW_ERASE, RDW_INVALIDATE, RDW_FRAME, RDW_ALLCHILDREN, RDW_UPDATENOW, RDW_INTERNALPAINT},
     UI::Input::KeyboardAndMouse::{GetAsyncKeyState, SetFocus, SetActiveWindow},
     UI::WindowsAndMessaging::*,
-    System::Threading::{GetCurrentProcessId, GetCurrentThreadId, AttachThreadInput},
+    System::Threading::{GetCurrentProcessId, GetCurrentThreadId, AttachThreadInput, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
 };
 
+#[cfg(windows)]
+use windows::Win32::System::ProcessStatus::K32GetModuleFileNameExW;
+
 static ORIGINAL_STYLES: Mutex<Vec<(isize, i32, i32, RECT)>> = Mutex::new(Vec::new());
+
+// ============================================================
+// 工作区 (Workspace) 数据结构
+// ============================================================
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Workspace {
+    pub name: String,
+    pub apps: Vec<String>, // EXE 路径列表
+}
+
+static WORKSPACES: Mutex<Vec<Workspace>> = Mutex::new(Vec::new());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowInfo {
@@ -594,6 +608,147 @@ async fn launch_app(path: String) -> Result<isize, String> {
     Err("仅支持 Windows".to_string())
 }
 
+// ============================================================
+// 工作区 (Workspace) 功能
+// ============================================================
+
+/// 通过窗口句柄获取进程的 EXE 路径
+#[tauri::command]
+fn get_process_path(target_hwnd: isize) -> Result<String, String> {
+    #[cfg(windows)]
+    unsafe {
+        let hwnd = HWND(target_hwnd as *mut _);
+        if !IsWindow(hwnd).as_bool() {
+            return Err("无效的窗口句柄".to_string());
+        }
+        
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        
+        if pid == 0 {
+            return Err("无法获取进程 ID".to_string());
+        }
+        
+        // 打开进程
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+            .map_err(|e| format!("无法打开进程: {}", e))?;
+        
+        // 获取路径
+        let mut buffer = [0u16; 1024];
+        let len = K32GetModuleFileNameExW(process, None, &mut buffer);
+        
+        if len == 0 {
+            return Err("无法获取进程路径".to_string());
+        }
+        
+        let path = String::from_utf16_lossy(&buffer[..len as usize]);
+        Ok(path)
+    }
+    #[cfg(not(windows))]
+    Err("仅支持 Windows".to_string())
+}
+
+/// 保存工作区
+#[tauri::command]
+fn save_workspace(name: String, hwnds: Vec<isize>) -> Result<(), String> {
+    let mut apps = Vec::new();
+    
+    for hwnd in hwnds {
+        if let Ok(path) = get_process_path(hwnd) {
+            if !apps.contains(&path) {
+                apps.push(path);
+            }
+        }
+    }
+    
+    if apps.is_empty() {
+        return Err("没有可保存的应用".to_string());
+    }
+    
+    let mut workspaces = WORKSPACES.lock().unwrap();
+    
+    // 如果同名工作区已存在，更新它
+    if let Some(ws) = workspaces.iter_mut().find(|w| w.name == name) {
+        ws.apps = apps;
+    } else {
+        workspaces.push(Workspace { name, apps });
+    }
+    
+    // 持久化到文件
+    save_workspaces_to_file(&workspaces);
+    
+    Ok(())
+}
+
+/// 获取所有工作区
+#[tauri::command]
+fn get_workspaces() -> Vec<Workspace> {
+    let workspaces = WORKSPACES.lock().unwrap();
+    workspaces.clone()
+}
+
+/// 删除工作区
+#[tauri::command]
+fn delete_workspace(name: String) -> Result<(), String> {
+    let mut workspaces = WORKSPACES.lock().unwrap();
+    let len_before = workspaces.len();
+    workspaces.retain(|w| w.name != name);
+    
+    if workspaces.len() == len_before {
+        return Err("工作区不存在".to_string());
+    }
+    
+    save_workspaces_to_file(&workspaces);
+    Ok(())
+}
+
+/// 恢复工作区 (返回需要启动的应用路径列表)
+#[tauri::command]
+fn restore_workspace(name: String) -> Result<Vec<String>, String> {
+    let workspaces = WORKSPACES.lock().unwrap();
+    
+    if let Some(ws) = workspaces.iter().find(|w| w.name == name) {
+        Ok(ws.apps.clone())
+    } else {
+        Err("工作区不存在".to_string())
+    }
+}
+
+// 持久化辅助函数
+fn save_workspaces_to_file(workspaces: &Vec<Workspace>) {
+    if let Ok(config_dir) = std::env::var("APPDATA") {
+        let path = std::path::Path::new(&config_dir)
+            .join("WindowHub")
+            .join("workspaces.json");
+        
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        
+        if let Ok(json) = serde_json::to_string_pretty(workspaces) {
+            let _ = std::fs::write(path, json);
+        }
+    }
+}
+
+fn load_workspaces_from_file() {
+    if let Ok(config_dir) = std::env::var("APPDATA") {
+        let path = std::path::Path::new(&config_dir)
+            .join("WindowHub")
+            .join("workspaces.json");
+        
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(loaded) = serde_json::from_str::<Vec<Workspace>>(&content) {
+                    let mut workspaces = WORKSPACES.lock().unwrap();
+                    *workspaces = loaded;
+                    println!("[SETUP] 已加载 {} 个工作区", workspaces.len());
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileResult {
     pub name: String,
@@ -746,7 +901,12 @@ pub fn run() {
             enumerate_installed_apps,
             launch_app,
             search_files,
-            force_repaint
+            force_repaint,
+            get_process_path,
+            save_workspace,
+            get_workspaces,
+            delete_workspace,
+            restore_workspace
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
